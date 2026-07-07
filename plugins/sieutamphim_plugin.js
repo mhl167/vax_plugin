@@ -12,14 +12,14 @@ function getManifest() {
     return JSON.stringify({
         "id": "sieutamphim",
         "name": "Sưu Tầm Phim",
-        "version": "1.0.0",
+        "version": "1.0.9",
         "baseUrl": "https://www.sieutamphim.pro",
         "iconUrl": "https://www.sieutamphim.pro/posts/2024/06/cropped-logosieutamphim-192x192.png",
         "isEnabled": true,
         "isAdult": false,
         "type": "MOVIE",
         "layoutType": "VERTICAL",
-        "playerType": "auto"
+        "playerType": "embed"
     });
 }
 
@@ -27,6 +27,16 @@ function log(msg) {
     if (typeof nativeLog !== 'undefined') {
         nativeLog("[STPhim] " + msg);
     }
+}
+
+function getSlugFromUrl(url) {
+    if (!url) return "";
+    var cleanUrl = url.split("?")[0];
+    var match = cleanUrl.match(/\/([^\/]+)\.html$/i);
+    if (match) return match[1];
+    var parts = cleanUrl.split("/");
+    var last = parts[parts.length - 1] || parts[parts.length - 2] || "";
+    return last.replace(".html", "");
 }
 
 // ========================================================
@@ -87,12 +97,18 @@ function getUrlSearch(keyword, filtersJson) {
 
 function getUrlDetail(id) {
     log("Resolving ID: " + id);
-    if (id && id.startsWith("play-")) {
+    if (!id) return "";
+    if (id.startsWith("play-")) {
         var resolved = id.replace("play-", "");
         log("Resolved Stream ID to: " + resolved);
         return resolved;
     }
-    return id.startsWith("http") ? id : BASE_URL + "/" + id;
+    if (id.startsWith("http")) {
+        return id;
+    }
+    var wpUrl = BASE_URL + "/wp-json/wp/v2/posts?slug=" + encodeURIComponent(id);
+    log("Resolved Slug to WordPress REST API: " + wpUrl);
+    return wpUrl;
 }
 
 // ========================================================
@@ -128,7 +144,7 @@ function parseListResponse(html) {
             if (poster.startsWith("//")) poster = "https:" + poster;
 
             items.push({
-                id: url,
+                id: getSlugFromUrl(url),
                 title: title,
                 posterUrl: poster
             });
@@ -158,42 +174,87 @@ function parseMovieDetail(html, url) {
         return JSON.stringify({ id: url, servers: [] });
     }
     try {
-        var title = (html.match(/<meta property="og:title" content="([^"]+)"/i) || [])[1] || "";
-        var poster = (html.match(/<meta property="og:image" content="([^"]+)"/i) || [])[1] || "";
-        var description = (html.match(/<meta property="og:description" content="([^"]+)"/i) || [])[1] || "";
-        var movieUrl = (html.match(/<meta property="og:url" content="([^"]+)"/i) || [])[1] || url;
-        
-        // Tìm Post ID (thường có trong shortlink hoặc các biến script)
-        var postIdMatch = html.match(/\/\?p=(\d+)/) || html.match(/post-id=["'](\d+)/) || html.match(/postId\s*:\s*(\d+)/) || html.match(/post-id:(\d+)/);
-        var postId = postIdMatch ? postIdMatch[1] : "";
-        log("Found Movie: " + title + " (PostID: " + postId + ")");
+        var isWpApi = url && url.includes("/wp-json/wp/v2/posts");
+        var title = "";
+        var poster = "";
+        var description = "";
+        var movieUrl = url;
+        var postId = "";
+        var contentHtml = html;
 
+        if (isWpApi) {
+            log("Parsing detail from WordPress REST API JSON response");
+            var posts = JSON.parse(html);
+            if (!posts || posts.length === 0) {
+                log("No WordPress post found for this slug");
+                return JSON.stringify({ servers: [] });
+            }
+            var post = posts[0];
+            title = post.title ? post.title.rendered : "";
+            movieUrl = post.link || url;
+            postId = String(post.id || "");
+            contentHtml = post.content ? post.content.rendered : "";
+            
+            description = post.excerpt ? post.excerpt.rendered.replace(/<[^>]*>/g, "").trim() : "";
+            
+            // Cải tiến lấy ảnh bìa Featured Image của WordPress API
+            if (post.jetpack_featured_media_url) {
+                poster = post.jetpack_featured_media_url;
+            } else if (post.featured_media_src_url) {
+                poster = post.featured_media_src_url;
+            } else if (post.yoast_head_json && post.yoast_head_json.og_image && post.yoast_head_json.og_image.length > 0) {
+                poster = post.yoast_head_json.og_image[0].url;
+            } else {
+                var imgMatch = contentHtml.match(/<img[^>]*src="([^"]+)"/i);
+                poster = imgMatch ? imgMatch[1] : "";
+            }
+            log("Parsed Title from WP API: " + title + " (PostID: " + postId + ")");
+        } else {
+            title = (html.match(/<meta property="og:title" content="([^"]+)"/i) || [])[1] || "";
+            
+            // Cải tiến regex để quét meta og:image linh hoạt bất kể thứ tự content/property
+            var ogImageMatch = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) || 
+                               html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i) ||
+                               html.match(/<meta[^>]+name="twitter:image"[^>]+content="([^"]+)"/i);
+            poster = ogImageMatch ? ogImageMatch[1] : "";
+            
+            if (!poster) {
+                var fallbackImgMatch = html.match(/<img[^>]+(?:src|data-src)="([^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i);
+                if (fallbackImgMatch) poster = fallbackImgMatch[1];
+            }
+            
+            description = (html.match(/<meta property="og:description" content="([^"]+)"/i) || [])[1] || "";
+            movieUrl = (html.match(/<meta property="og:url" content="([^"]+)"/i) || [])[1] || url;
+            
+            var postIdMatch = html.match(/\/\?p=(\d+)/) || html.match(/post-id=["'](\d+)/) || html.match(/postId\s*:\s*(\d+)/) || html.match(/post-id:(\d+)/);
+            postId = postIdMatch ? postIdMatch[1] : "";
+            log("Parsed Title from HTML: " + title + " (PostID: " + postId + ")");
+        }
+
+        var slugId = getSlugFromUrl(movieUrl);
         var servers = [];
         var usedServer = {};
 
-        // Pattern bóc tách Server và Danh sách tập từ data-episodes (JSON encoded)
-        // Đây là phần sửa lỗi: Quét toàn bộ HTML để tìm server
+        // Quét toàn bộ HTML/Content để tìm server
         var groupRegex = /data-server=['"]([^'"]+)['"]/gi;
         var m;
-        while ((m = groupRegex.exec(html)) !== null) {
+        while ((m = groupRegex.exec(contentHtml)) !== null) {
             var serverId = m[1];
             if (usedServer[serverId]) continue;
             usedServer[serverId] = true;
 
-            // Tìm block chứa data-episodes của server này
-            var epBlockRegex = new RegExp('data-server=["\']' + serverId + '["\'][\\s\\S]*?data-episodes="([^"]+)"', "i");
-            var epBlockMatch = html.match(epBlockRegex);
+            // Tìm block chứa data-episodes của server này (hỗ trợ bọc bởi cả nháy đơn lẫn nháy kép)
+            var epBlockRegex = new RegExp('data-server=["\']' + serverId + '["\'][\\s\\S]*?data-episodes=([\'"])([\\s\\S]*?)\\1', "i");
+            var epBlockMatch = contentHtml.match(epBlockRegex);
 
             var epCount = 0;
             if (epBlockMatch) {
-                var rawEpisodes = epBlockMatch[1].replace(/&quot;/g, '"');
-                try {
-                    var epJson = JSON.parse(rawEpisodes);
-                    epCount = Object.keys(epJson).length;
-                } catch (e) {
-                    // Fallback: Đếm số lượng key trong chuỗi encoded
-                    var matches = epBlockMatch[1].match(/&quot;\d+&quot;/g);
-                    epCount = matches ? matches.length : 1;
+                var rawEpisodes = epBlockMatch[2];
+                // Sử dụng regex trích xuất các tập phim theo cú pháp {"value1","value2"} của web nguồn
+                var epRegex = /{"([^"]+)","([^"]+)"}/g;
+                var epMatch;
+                while ((epMatch = epRegex.exec(rawEpisodes)) !== null) {
+                    epCount++;
                 }
             }
 
@@ -205,7 +266,7 @@ function parseMovieDetail(html, url) {
                     // QUAN TRỌNG: Không dùng :// để App nhảy vào getUrlDetail
                     id: "play-" + movieUrl + "?id=" + postId + "&server=" + encodeURIComponent(serverId) + "&tap=" + j,
                     name: epCount === 1 ? "Full" : "Tập " + j,
-                    slug: String(j)
+                    slug: "tap-" + j
                 });
             }
 
@@ -219,12 +280,12 @@ function parseMovieDetail(html, url) {
         if (servers.length === 0) {
             servers.push({
                 name: "Mặc định",
-                episodes: [{ id: "play://" + movieUrl, name: "Full", slug: "full" }]
+                episodes: [{ id: "play-" + movieUrl + "?id=" + postId + "&server=hx&tap=1", name: "Full", slug: "full" }]
             });
         }
 
         return JSON.stringify({
-            id: movieUrl,
+            id: "",
             title: decodeHtmlEntities(title.replace(" - Siêu Tầm Phim", "").trim()),
             posterUrl: poster,
             backdropUrl: poster,
@@ -234,6 +295,7 @@ function parseMovieDetail(html, url) {
             status: "Hoàn thành"
         });
     } catch (e) {
+        log("Error in parseMovieDetail: " + e.message);
         return JSON.stringify({ servers: [] });
     }
 }
@@ -246,18 +308,66 @@ function parseDetailResponse(html, url) {
     log("Parsing Stream for: " + url);
     try {
         if (url.includes("?id=") && url.includes("&server=")) {
-            var postId = (url.match(/id=(\d+)/) || [])[1];
             var server = (url.match(/server=([^&]+)/) || [])[1];
-            var tap = (url.match(/tap=(\d+)/) || [])[1];
+            var tapStr = (url.match(/tap=(\d+)/) || [])[1];
+            var tap = parseInt(tapStr, 10);
             
-            if (postId && server && tap) {
-                var playerUrl = BASE_URL + "/p/player.html?id=" + postId + "&server=" + server + "&tap=" + tap;
-                log("Constructed Player URL: " + playerUrl);
-                return JSON.stringify({
-                    url: playerUrl,
-                    headers: { "Referer": BASE_URL + "/" },
-                    isEmbed: true
-                });
+            if (server && tap) {
+                // Tìm block chứa data-episodes của server tương ứng
+                var epBlockRegex = new RegExp('data-server=["\']' + server + '["\'][\\s\\S]*?data-episodes=([\'"])([\\s\\S]*?)\\1', "i");
+                var epBlockMatch = html.match(epBlockRegex);
+                
+                if (epBlockMatch) {
+                    var rawEpisodes = epBlockMatch[2];
+                    var epRegex = /{"([^"]+)","([^"]+)"}/g;
+                    var epMatch;
+                    var currentIndex = 1;
+                    while ((epMatch = epRegex.exec(rawEpisodes)) !== null) {
+                        if (currentIndex === tap) {
+                            var rawSrc = epMatch[1];
+                            // Giải mã XOR với khóa 42 để lấy link abyssplayer.com thật
+                            var decrypted = "";
+                            for (var i = 0; i < rawSrc.length; i++) {
+                                decrypted += String.fromCharCode(rawSrc.charCodeAt(i) ^ 42);
+                            }
+                            decrypted = decrypted.replace(/https?:\/\/(short\.ink|short\.icu)\//g, "https://abyssplayer.com/");
+                            log("Decrypted Stream URL: " + decrypted);
+                            
+                            if (decrypted.indexOf(".m3u8") !== -1) {
+                                return JSON.stringify({
+                                    url: decrypted,
+                                    mimeType: "application/x-mpegURL",
+                                    isEmbed: false
+                                });
+                            } else {
+                                var isAbyss = decrypted.indexOf("abyssplayer.com") !== -1 || 
+                                              decrypted.indexOf("abyss.to") !== -1 || 
+                                              decrypted.indexOf("short.ink") !== -1 || 
+                                              decrypted.indexOf("short.icu") !== -1;
+                                
+                                if (isAbyss) {
+                                    // Tạo trang HTML bọc iframe của abyssplayer để tránh redirect bypass sang abyss.to
+                                    var iframeHtml = '<html><body style="margin:0;padding:0;background:#000;"><iframe src="' + decrypted + '" style="width:100%;height:100%;border:none;" allowfullscreen></iframe></body></html>';
+                                    var base64Url = "data:text/html;base64," + base64Encode(iframeHtml);
+                                    
+                                    return JSON.stringify({
+                                        url: base64Url,
+                                        isEmbed: true,
+                                        headers: { "Referer": BASE_URL + "/" }
+                                    });
+                                } else {
+                                    // Các link khác (như blogger.com) trả về trực tiếp để tránh WebView chặn load data URL
+                                    return JSON.stringify({
+                                        url: decrypted,
+                                        isEmbed: true,
+                                        headers: { "Referer": BASE_URL + "/" }
+                                    });
+                                }
+                            }
+                        }
+                        currentIndex++;
+                    }
+                }
             }
         }
 
@@ -305,6 +415,28 @@ function decodeHtmlEntities(str) {
         .replace(/&nbsp;/g, " ").trim();
 }
 
+function base64Encode(str) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    var encoded = '';
+    for (var i = 0; i < str.length; i += 3) {
+        var c1 = str.charCodeAt(i);
+        var c2 = i + 1 < str.length ? str.charCodeAt(i + 1) : NaN;
+        var c3 = i + 2 < str.length ? str.charCodeAt(i + 2) : NaN;
+        
+        var byte1 = c1 >> 2;
+        var byte2 = ((c1 & 3) << 4) | (isNaN(c2) ? 0 : c2 >> 4);
+        var byte3 = isNaN(c2) ? 64 : ((c2 & 15) << 2) | (isNaN(c3) ? 0 : c3 >> 6);
+        var byte4 = isNaN(c3) ? 64 : c3 & 63;
+        
+        encoded += chars.charAt(byte1) + chars.charAt(byte2) + chars.charAt(byte3) + chars.charAt(byte4);
+    }
+    return encoded;
+}
+
 function parseCategoriesResponse(html) { return "[]"; }
 function parseCountriesResponse(html) { return "[]"; }
 function parseYearsResponse(html) { return "[]"; }
+
+function getUrlCategories() { return ""; }
+function getUrlCountries() { return ""; }
+function getUrlYears() { return ""; }

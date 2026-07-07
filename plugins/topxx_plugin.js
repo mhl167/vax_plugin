@@ -6,11 +6,12 @@ function getManifest() {
     return JSON.stringify({
         "id": "topxx",
         "name": "TopXX",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "baseUrl": "https://topxx.vip",
         "iconUrl": "https://topxx.vip/favicon.ico",
         "isEnabled": true,
         "isAdult": true,
+        "layoutType": "HORIZONTAL",
         "type": "MOVIE"
     });
 }

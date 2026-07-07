@@ -24,6 +24,7 @@ function getHomeSections() {
 
 function getPrimaryCategories() {
     return JSON.stringify([
+        { name: 'FIFA WORLD CUP 2026', slug: 'fifa-world-cup-2026' },
         { name: 'Sự Kiện', slug: 'su-kien' },
         { name: 'THỂ THAO QT', slug: 'the-thao-quoc-te' },
         { name: '⚽ Thể thao QT', slug: 'bong-da-quoc-te' },
@@ -88,6 +89,7 @@ function getUrlYears() { return ""; }
 // =============================================================================
 
 var CATEGORY_MAP = {
+    'fifa-world-cup-2026': 'FIFA WORLD CUP 2026',
     'su-kien': 'Sự Kiện',
     'the-thao-quoc-te': 'THỂ THAO QUỐC TẾ',
     'bong-da-quoc-te': '⚽| Thể thao quốc tế',
@@ -278,9 +280,13 @@ function parseMovieDetail(apiResponseJson, apiUrl) {
 
         var servers = [];
         var episodes = [];
+        var episodeId = channel.url;
+        if (channel.userAgent) {
+            episodeId += "|ua=" + encodeURIComponent(channel.userAgent);
+        }
 
         episodes.push({
-            id: channel.url,
+            id: episodeId,
             name: channel.name,
             slug: "stream"
         });
@@ -321,14 +327,24 @@ function parseDetailResponse(apiResponseJson, apiUrl) {
         var streamUrl = apiUrl || "";
         var userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
+        if (streamUrl.indexOf('|ua=') !== -1) {
+            var parts = streamUrl.split('|ua=');
+            streamUrl = parts[0];
+            userAgent = decodeURIComponent(parts[1]);
+        }
+
         return JSON.stringify({
             url: streamUrl,
             headers: { "User-Agent": userAgent },
             subtitles: []
         });
     } catch (error) {
+        var streamUrlFallback = apiUrl || "";
+        if (streamUrlFallback.indexOf('|ua=') !== -1) {
+            streamUrlFallback = streamUrlFallback.split('|ua=')[0];
+        }
         return JSON.stringify({
-            url: apiUrl,
+            url: streamUrlFallback,
             headers: { "User-Agent": "Mozilla/5.0" },
             subtitles: []
         });

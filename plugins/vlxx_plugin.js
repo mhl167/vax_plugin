@@ -6,7 +6,7 @@ function getManifest() {
     return JSON.stringify({
         "id": "vlxx",
         "name": "VLXX",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "baseUrl": "https://vlxx.moi",
         "iconUrl": "https://raw.githubusercontent.com/youngbi/repo/main/plugins/vlxx.ico",
         "isEnabled": true,
@@ -161,7 +161,9 @@ function parseSearchResponse(html) {
 
 function parseMovieDetail(html) {
     try {
-        var titleMatch = html.match(/<h2[^>]*page-title[^>]*>([\s\S]*?)<\/h2>/i);
+        var titleMatch = html.match(/<h1[^>]*page-title[^>]*>([\s\S]*?)<\/h1>/i)
+            || html.match(/<h2[^>]*page-title[^>]*>([\s\S]*?)<\/h2>/i)
+            || html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
         var title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : "";
 
         var descMatch = html.match(/<div[^>]*class=["']video-description["'][^>]*>([\s\S]*?)<\/div>/i);

@@ -8,7 +8,7 @@ function getManifest() {
         "name": "OTruyen",
         "version": "1.0.2",
         "baseUrl": "https://otruyenapi.com",
-        "iconUrl": "https://otruyenapi.com/favicon.ico",
+        "iconUrl": "https://docs.otruyenapi.com/favicon-32x32.png",
         "isEnabled": true,
         "type": "MANGA"
     });

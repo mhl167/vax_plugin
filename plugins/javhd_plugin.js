@@ -6,13 +6,13 @@ function getManifest() {
     return JSON.stringify({
         "id": "javhd",
         "name": "JavHD",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "baseUrl": "https://javhdz.today",
         "iconUrl": "https://javhdz.today/favicon.ico",
         "isEnabled": true,
         "isAdult": true,
         "type": "VIDEO",
-        "playerType": "embed"
+        "playerType": "embedtoexoplay"
     });
 }
 
@@ -73,38 +73,58 @@ function getUrlList(slug, filtersJson) {
     var filters = JSON.parse(filtersJson || "{}");
     var page = parseInt(filters.page) || 1;
     var sortPath = (filters.sort && filters.sort !== 'recent') ? (filters.sort + '/') : '';
-    var pageStr = (page > 1) ? page + '/' : '';
 
+    var targetSlug = slug || 'recent';
     if (filters.category) {
-        // /uncensored-jav/2/
-        return "https://javhdz.today/" + filters.category + "/" + sortPath + pageStr;
+        targetSlug = filters.category;
     }
 
-    if (!slug || slug === 'recent') {
-        // /recent/2/
-        return "https://javhdz.today/recent/" + pageStr;
+    var isBrowse = false;
+    var browsePrefixes = ['recent', 'popular', 'rated', 'discussed', 'downloaded', 'longest', 'watched'];
+    for (var i = 0; i < browsePrefixes.length; i++) {
+        if (targetSlug.indexOf(browsePrefixes[i]) === 0) {
+            isBrowse = true;
+            break;
+        }
     }
 
-    // Handles absolute slugs
-    if (slug.indexOf("http") === 0) {
-        // Strip trailing slash then append /page/
-        var base = slug.replace(/\/+$/, '');
-        return base + '/' + pageStr;
+    var finalUrl = "";
+    if (filters.category) {
+        finalUrl = "https://javhdz.today/" + filters.category + "/" + sortPath;
+    } else if (!slug || slug === 'recent') {
+        finalUrl = "https://javhdz.today/recent/";
+    } else if (slug.indexOf("http") === 0) {
+        finalUrl = slug.replace(/\/+$/, '') + '/';
+    } else {
+        if (slug.indexOf("/") === 0) {
+            slug = slug.replace(/^\/+/, '').replace(/\/+$/, '');
+        }
+        finalUrl = "https://javhdz.today/" + slug + "/" + sortPath;
     }
 
-    if (slug.indexOf("/") === 0) {
-        slug = slug.replace(/^\/+/, '').replace(/\/+$/, '');
+    var params = [];
+    if (isBrowse) {
+        params.push("ajax=browse_videos");
+    } else {
+        params.push("ajax=1");
     }
 
-    // e.g., 'popular/today' -> /popular/today/2/
-    return "https://javhdz.today/" + slug + "/" + sortPath + pageStr;
+    if (page > 1) {
+        params.push("page=" + page);
+    }
+
+    var separator = (finalUrl.indexOf('?') !== -1) ? '&' : '?';
+    return finalUrl + separator + params.join('&');
 }
 
 function getUrlSearch(keyword, filtersJson) {
     var filters = JSON.parse(filtersJson || "{}");
     var page = parseInt(filters.page) || 1;
-    var pageStr = (page > 1) ? page + '/' : '';
-    return "https://javhdz.today/search/video/" + pageStr + "?s=" + encodeURIComponent(keyword);
+    var url = "https://javhdz.today/search/video/?s=" + encodeURIComponent(keyword) + "&ajax=1";
+    if (page > 1) {
+        url += "&page=" + page;
+    }
+    return url;
 }
 
 function getUrlDetail(slug) {
@@ -134,8 +154,25 @@ var PluginUtils = {
 };
 
 function parseListResponse(html) {
+    var responseHtml = html || "";
+    var paginationHtml = "";
+
+    if (responseHtml.trim().indexOf('{') === 0) {
+        try {
+            var data = JSON.parse(responseHtml);
+            if (data && data.html) {
+                responseHtml = data.html;
+                if (data.pagination) {
+                    paginationHtml = data.pagination;
+                }
+            }
+        } catch (e) {
+            // Fallback to original html
+        }
+    }
+
     var moviesMap = {};
-    var parts = html.split(/<li[^>]*id=["']video-[^"']*["'][^>]*>/);
+    var parts = responseHtml.split(/<li[^>]*id=["']video-[^"']*["'][^>]*>/);
 
     for (var i = 1; i < parts.length; i++) {
         var itemHtml = parts[i];
@@ -211,22 +248,39 @@ function parseListResponse(html) {
     var totalPages = 1;
     var currentPage = 1;
 
-    // Try path-based pagination: href="/recent/2/", href="/uncensored-jav/3/"
-    var paginationBlock = html.match(/<ul[^>]*class="pagination[^"]*"[^>]*>([\s\S]*?)<\/ul>/);
+    var paginationSrc = paginationHtml || responseHtml;
+    var pagNav = "";
+    var paginationBlock = paginationSrc.match(/<ul[^>]*class="[^"]*pagination[^"]*"[^>]*>([\s\S]*?)<\/ul>/);
     if (paginationBlock) {
-        var pagNav = paginationBlock[1];
+        pagNav = paginationBlock[1];
+    } else if (paginationHtml) {
+        pagNav = paginationHtml;
+    }
 
+    if (pagNav) {
         // Find current page from active li
-        var activeMatch = pagNav.match(/<li[^>]*class="[^"]*active[^"]*"[^>]*>\s*<a[^>]*>(\d+)<\/a>/i);
+        var activeMatch = pagNav.match(/<li[^>]*class="[^"]*active[^"]*"[^>]*>\s*<a[^>]*>(\d+)<\/a>/i)
+            || pagNav.match(/<li[^>]*class="[^"]*active[^"]*"[^>]*>\s*<span[^>]*>(\d+)<\/span>/i);
         if (activeMatch) {
             currentPage = parseInt(activeMatch[1]) || 1;
         }
 
-        // Find all page numbers from links: href="/slug/N/"
-        var pageLinks = pagNav.match(/href="[^"]*\/(\d+)\/?"/g);
+        // Find all page numbers from links: href="/slug/N/" hoặc ?page=N
+        var pageLinks = pagNav.match(/href="[^"]*\/(\d+)\/?[^"]*"/g);
         if (pageLinks) {
             for (var j = 0; j < pageLinks.length; j++) {
                 var pMatch = pageLinks[j].match(/\/(\d+)\/?"/);
+                if (pMatch) {
+                    var p = parseInt(pMatch[1]);
+                    if (p > totalPages) totalPages = p;
+                }
+            }
+        }
+
+        var queryPageLinks = pagNav.match(/href="[^"]*(?:[?&]|&amp;)page=(\d+)[^"]*"/g);
+        if (queryPageLinks) {
+            for (var j = 0; j < queryPageLinks.length; j++) {
+                var pMatch = queryPageLinks[j].match(/(?:[?&]|&amp;)page=(\d+)/);
                 if (pMatch) {
                     var p = parseInt(pMatch[1]);
                     if (p > totalPages) totalPages = p;
@@ -237,10 +291,10 @@ function parseListResponse(html) {
 
     // Fallback: try ?page=N format
     if (totalPages <= 1) {
-        var queryPages = html.match(/[?&]page=(\d+)/g);
+        var queryPages = paginationSrc.match(/(?:[?&]|&amp;)page=(\d+)/g);
         if (queryPages) {
             for (var k = 0; k < queryPages.length; k++) {
-                var qMatch = queryPages[k].match(/(\d+)/);
+                var qMatch = queryPages[k].match(/page=(\d+)/) || queryPages[k].match(/(\d+)/);
                 if (qMatch) {
                     var qp = parseInt(qMatch[1]);
                     if (qp > totalPages) totalPages = qp;
